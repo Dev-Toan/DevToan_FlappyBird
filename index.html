@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Flappy Bird</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    height: 100%;
+    background: #111;
+    font-family: "Segoe UI", system-ui, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  #game-wrap {
+    position: relative;
+    overflow: hidden;
+  }
+
+  canvas {
+    display: block;
+    background: linear-gradient(#4ec0ca, #71c5cf);
+    touch-action: none;
+    cursor: pointer;
+    /* Phủ kín màn hình, giữ tỉ lệ 16:9 */
+    width: min(100vw, 100vh * 16 / 9);
+    height: min(100vh, 100vw * 9 / 16);
+    aspect-ratio: 16 / 9;
+  }
+
+  /* Overlay (start / game over) */
+  #overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    color: #fff;
+    text-align: center;
+    background: rgba(0, 0, 0, .35);
+    backdrop-filter: blur(2px);
+    transition: opacity .2s;
+  }
+
+  #overlay.hidden { opacity: 0; pointer-events: none; }
+
+  #overlay h1 {
+    font-size: 34px;
+    letter-spacing: 1px;
+    text-shadow: 2px 2px 0 #d5820b;
+    color: #ffd23f;
+  }
+
+  #overlay p { font-size: 15px; opacity: .95; line-height: 1.5; }
+
+  #overlay .big-score { font-size: 44px; font-weight: 800; }
+
+  #overlay .best { font-size: 15px; opacity: .9; }
+
+  .btn {
+    margin-top: 6px;
+    padding: 11px 26px;
+    font-size: 16px;
+    font-weight: 700;
+    color: #fff;
+    background: #f5a623;
+    border: none;
+    border-radius: 30px;
+    cursor: pointer;
+    box-shadow: 0 4px 0 #c17d12;
+    transition: transform .05s, box-shadow .05s;
+  }
+  .btn:active { transform: translateY(3px); box-shadow: 0 1px 0 #c17d12; }
+
+  #muteBtn {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 40px;
+    height: 40px;
+    font-size: 18px;
+    line-height: 1;
+    border: none;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, .35);
+    color: #fff;
+    cursor: pointer;
+    z-index: 5;
+    transition: background .15s;
+  }
+  #muteBtn:hover { background: rgba(0, 0, 0, .55); }
+
+  #dayNightBtn {
+    position: absolute;
+    top: 10px;
+    right: 58px;
+    width: 40px;
+    height: 40px;
+    font-size: 18px;
+    line-height: 1;
+    border: none;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, .35);
+    color: #fff;
+    cursor: pointer;
+    z-index: 5;
+    transition: background .15s;
+  }
+  #dayNightBtn:hover { background: rgba(0, 0, 0, .55); }
+
+  #credit {
+    position: fixed;
+    right: 10px;
+    bottom: 8px;
+    z-index: 10;
+    font-size: 18px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, .9);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, .6);
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+</head>
+<body>
+  <div id="game-wrap">
+    <canvas id="game" width="960" height="540"></canvas>
+    <button id="muteBtn" title="Bật/tắt nhạc nền">🔊</button>
+    <button id="dayNightBtn" title="Chế độ Ngày/Đêm">🌙</button>
+    <div id="overlay">
+      <h1>FLAPPY BIRD</h1>
+      <p>Nhấn <b>Space</b> / <b>Click</b> / <b>Chạm</b><br />để bay lên.<br />Tránh các ống!<br /><small>P / Esc: tạm dừng</small></p>
+      <button class="btn" id="startBtn">Bắt đầu</button>
+    </div>
+  </div>
+
+  <div id="credit">Game design by NguyenDucToan</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+  const overlay = document.getElementById("overlay");
+  const startBtn = document.getElementById("startBtn");
+
+  const W = canvas.width;
+  const H = canvas.height;
+
+  // ---- Âm thanh (Web Audio API — không cần file ngoài) ----
+  const Sound = (() => {
+    let ctx = null;
+    let musicOn = true;
+    let musicTimer = null;
+
+    function ensure() {
+      if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+      if (ctx.state === "suspended") ctx.resume();
+      return ctx;
+    }
+
+    // phát 1 nốt ngắn
+    function beep(freq, dur, type = "square", vol = 0.15, when = 0) {
+      const ac = ensure();
+      const t = ac.currentTime + when;
+      const osc = ac.createOscillator();
+      const gain = ac.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(freq, t);
+      gain.gain.setValueAtTime(vol, t);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      osc.connect(gain).connect(ac.destination);
+      osc.start(t);
+      osc.stop(t + dur);
+    }
+
+    // hiệu ứng bay: tiếng "vút" đi lên
+    function flap() {
+      const ac = ensure();
+      const t = ac.currentTime;
+      const osc = ac.createOscillator();
+      const gain = ac.createGain();
+      osc.type = "square";
+      osc.frequency.setValueAtTime(420, t);
+      osc.frequency.exponentialRampToValueAtTime(680, t + 0.08);
+      gain.gain.setValueAtTime(0.18, t);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+      osc.connect(gain).connect(ac.destination);
+      osc.start(t);
+      osc.stop(t + 0.12);
+    }
+
+    function point() { beep(880, 0.09, "square", 0.16); beep(1320, 0.09, "square", 0.14, 0.08); }
+    function hit()   { beep(200, 0.18, "sawtooth", 0.2); beep(90, 0.3, "sawtooth", 0.2, 0.1); }
+
+    // nhạc nền: vòng lặp giai điệu đơn giản
+    const MELODY = [523, 659, 784, 659, 587, 698, 587, 494]; // C E G E D F D B
+    function startMusic() {
+      if (!musicOn) return;
+      stopMusic();
+      let i = 0;
+      const step = 320; // ms mỗi nốt
+      const play = () => {
+        const ac = ensure();
+        const t = ac.currentTime;
+        const osc = ac.createOscillator();
+        const gain = ac.createGain();
+        osc.type = "triangle";
+        osc.frequency.setValueAtTime(MELODY[i % MELODY.length] / 2, t);
+        gain.gain.setValueAtTime(0.06, t);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t + step / 1000 * 0.9);
+        osc.connect(gain).connect(ac.destination);
+        osc.start(t);
+        osc.stop(t + step / 1000);
+        i++;
+      };
+      play();
+      musicTimer = setInterval(play, step);
+    }
+    function stopMusic() {
+      if (musicTimer) { clearInterval(musicTimer); musicTimer = null; }
+    }
+    function toggleMusic() {
+      musicOn = !musicOn;
+      if (!musicOn) stopMusic();
+      return musicOn;
+    }
+
+    return { flap, point, hit, startMusic, stopMusic, toggleMusic, ensure,
+             get musicOn() { return musicOn; } };
+  })();
+
+
+  // ---- Cấu hình game ----
+  const GRAVITY = 0.22;
+  const FLAP = -6.0;
+  const PIPE_GAP = 190;      // khe hở ban đầu giữa 2 ống
+  const MIN_GAP = 130;       // khe hở nhỏ nhất khi đã khó
+  const PIPE_WIDTH = 70;
+  const PIPE_SPACING = 340;  // khoảng cách ngang giữa các ống
+  const PIPE_SPEED = 3.2;    // tốc độ ban đầu
+  const MAX_SPEED = 6.0;     // tốc độ tối đa khi đã khó
+  const GROUND_H = 90;
+
+  // Độ khó tăng dần theo điểm: nhanh hơn + khe hở hẹp dần (có chặn trên/dưới)
+  function currentSpeed() { return Math.min(PIPE_SPEED + score * 0.06, MAX_SPEED); }
+  function currentGap()   { return Math.max(PIPE_GAP - score * 2.5, MIN_GAP); }
+
+  // ---- Trạng thái ----
+  const STATE = { READY: 0, PLAYING: 1, OVER: 2 };
+  let state = STATE.READY;
+  let paused = false;
+  let lastT = 0;
+
+  let bird, pipes, score, best, frames, groundX;
+  best = Number(localStorage.getItem("flappyBest") || 0);
+
+  // ---- Hiệu ứng ----
+  let flash = 0;          // độ đậm "chớp trắng" (0..1) khi va chạm
+  let shake = 0;          // cường độ rung màn hình (px)
+  let countdown = 0;      // thời gian đếm ngược còn lại (ms)
+  let floatTexts = [];    // các chữ "+1" bay lên
+  let wingPhase = 0;      // pha vỗ cánh liên tục (mượt)
+  let isNight = false;    // chế độ Ngày/Đêm
+
+  // sao trời cho chế độ Đêm (sinh 1 lần, cố định)
+  const stars = Array.from({ length: 44 }, () => ({
+    x: Math.random() * W,
+    y: Math.random() * (H - GROUND_H - 120),
+    s: Math.random() * 2 + 1
+  }));
+
+  function reset() {
+    bird = { x: 90, y: H / 2, r: 15, vy: 0, rot: 0 };
+    pipes = [];
+    score = 0;
+    frames = 0;
+    groundX = 0;
+    flash = 0;
+    shake = 0;
+    countdown = 0;
+    floatTexts = [];
+  }
+
+  function spawnPipe() {
+    const gap = currentGap();
+    const margin = 60;
+    const minTop = margin;
+    const maxTop = H - GROUND_H - gap - margin;
+    const top = minTop + Math.random() * (maxTop - minTop);
+    pipes.push({ x: W, top: top, gap: gap, passed: false });
+  }
+
+  function flap() {
+    if (state === STATE.PLAYING && !paused && countdown <= 0) {
+      bird.vy = FLAP;
+      Sound.flap();
+    }
+  }
+
+  function startGame() {
+    reset();
+    randomizeDayNight();            // mỗi lượt chơi random Ngày/Đêm
+    paused = false;
+    state = STATE.PLAYING;
+    countdown = 3000;               // đếm ngược 3-2-1 trước khi vào cuộc
+    overlay.classList.add("hidden");
+    Sound.ensure();
+    Sound.startMusic();
+  }
+
+  // random chế độ Ngày/Đêm và đồng bộ icon nút
+  function randomizeDayNight() {
+    isNight = Math.random() < 0.5;
+    dayNightBtn.textContent = isNight ? "☀️" : "🌙";
+    dayNightBtn.title = isNight ? "Chuyển sang Ngày" : "Chuyển sang Đêm";
+  }
+
+  function gameOver() {
+    state = STATE.OVER;
+    paused = false;
+    flash = 1;      // chớp trắng
+    shake = 14;     // rung màn hình
+    Sound.stopMusic();
+    Sound.hit();
+    if (score > best) {
+      best = score;
+      localStorage.setItem("flappyBest", best);
+    }
+    showOverlay(`
+      <div class="big-score">${score}</div>
+      <div class="best">Điểm cao nhất: ${best}</div>
+      <button class="btn" id="startBtn">Chơi lại</button>
+    `, "GAME OVER");
+  }
+
+  function showOverlay(html, title) {
+    overlay.innerHTML = `<h1>${title}</h1>` + html;
+    overlay.classList.remove("hidden");
+    overlay.querySelector("#startBtn").addEventListener("click", (e) => {
+      e.stopPropagation();
+      startGame();
+    });
+  }
+
+  // ---- Tạm dừng ----
+  function togglePause() {
+    if (state !== STATE.PLAYING) return;
+    paused = !paused;
+    if (paused) {
+      Sound.stopMusic();
+      overlay.innerHTML =
+        `<h1>TẠM DỪNG</h1>` +
+        `<p>Nhấn <b>P</b> / <b>Esc</b> hoặc nút bên dưới để tiếp tục</p>` +
+        `<button class="btn" id="resumeBtn">Tiếp tục</button>`;
+      overlay.classList.remove("hidden");
+      overlay.querySelector("#resumeBtn").addEventListener("click", (e) => {
+        e.stopPropagation();
+        togglePause();
+      });
+    } else {
+      overlay.classList.add("hidden");
+      countdown = 3000;             // đếm ngược lại khi tiếp tục
+      Sound.startMusic();
+    }
+  }
+
+  // Va chạm hình tròn (chim) với hình chữ nhật (ống): tìm điểm gần nhất trên
+  // hình chữ nhật rồi so khoảng cách với bán kính.
+  function circleHitsRect(cx, cy, r, rx, ry, rw, rh) {
+    const nx = Math.max(rx, Math.min(cx, rx + rw));
+    const ny = Math.max(ry, Math.min(cy, ry + rh));
+    const dx = cx - nx, dy = cy - ny;
+    return dx * dx + dy * dy < r * r;
+  }
+
+  // ---- Vòng lặp cập nhật ----
+  // dt = hệ số thời gian, chuẩn hóa theo 60fps (1.0 = đúng 60fps)
+  function update(dt) {
+    if (state !== STATE.PLAYING || paused) return;
+
+    // đếm ngược 3-2-1: đóng băng gameplay cho tới khi đếm xong
+    if (countdown > 0) {
+      countdown = Math.max(0, countdown - dt * (1000 / 60));
+      return;
+    }
+
+    frames++;
+
+    const speed = currentSpeed() * dt;
+
+    // chim
+    bird.vy += GRAVITY * dt;
+    bird.y += bird.vy * dt;
+    bird.rot = Math.max(-0.7, Math.min(1.2, bird.vy / 3.5));
+
+    // sinh ống (khoảng cách ngang cố định, không còn spawn đôi ở frame đầu)
+    if (!pipes.length || W - pipes[pipes.length - 1].x >= PIPE_SPACING) {
+      spawnPipe();
+    }
+
+    // di chuyển ống
+    for (const p of pipes) {
+      p.x -= speed;
+      if (!p.passed && p.x + PIPE_WIDTH < bird.x) {
+        p.passed = true;
+        score++;
+        Sound.point();
+        // chữ "+1" bay lên tại vị trí chim
+        floatTexts.push({ x: bird.x + 18, y: bird.y - 22, vy: -1.2, life: 1 });
+      }
+    }
+    pipes = pipes.filter(p => p.x + PIPE_WIDTH > 0);
+
+    // nền cuộn
+    groundX = (groundX - speed) % 24;
+
+    // chữ "+1" bay lên rồi mờ dần
+    for (const f of floatTexts) {
+      f.y += f.vy * dt;
+      f.life -= 0.02 * dt;
+    }
+    floatTexts = floatTexts.filter(f => f.life > 0);
+
+    // va chạm đất / trần
+    if (bird.y + bird.r >= H - GROUND_H) {
+      bird.y = H - GROUND_H - bird.r;
+      return gameOver();
+    }
+    if (bird.y - bird.r <= 0) {
+      bird.y = bird.r;
+      bird.vy = 0;
+    }
+
+    // va chạm ống (hình tròn thật với 2 hình chữ nhật trên/dưới)
+    for (const p of pipes) {
+      const by = p.top + p.gap;
+      const hitTop = circleHitsRect(bird.x, bird.y, bird.r, p.x, 0, PIPE_WIDTH, p.top);
+      const hitBottom = circleHitsRect(bird.x, bird.y, bird.r, p.x, by, PIPE_WIDTH, H - GROUND_H - by);
+      if (hitTop || hitBottom) {
+        return gameOver();
+      }
+    }
+  }
+
+  // ---- Vẽ ----
+  function drawPipe(p) {
+    const grad = ctx.createLinearGradient(p.x, 0, p.x + PIPE_WIDTH, 0);
+    grad.addColorStop(0, "#5aab3a");
+    grad.addColorStop(0.5, "#7ed957");
+    grad.addColorStop(1, "#4a8f2e");
+    ctx.fillStyle = grad;
+    ctx.strokeStyle = "#3a6b23";
+    ctx.lineWidth = 3;
+
+    const lip = 18, lipW = 8;
+    // ống trên
+    ctx.fillRect(p.x, 0, PIPE_WIDTH, p.top);
+    ctx.strokeRect(p.x, 0, PIPE_WIDTH, p.top);
+    ctx.fillRect(p.x - lipW, p.top - lip, PIPE_WIDTH + lipW * 2, lip);
+    ctx.strokeRect(p.x - lipW, p.top - lip, PIPE_WIDTH + lipW * 2, lip);
+    // ống dưới
+    const by = p.top + p.gap;
+    ctx.fillRect(p.x, by, PIPE_WIDTH, H - GROUND_H - by);
+    ctx.strokeRect(p.x, by, PIPE_WIDTH, H - GROUND_H - by);
+    ctx.fillRect(p.x - lipW, by, PIPE_WIDTH + lipW * 2, lip);
+    ctx.strokeRect(p.x - lipW, by, PIPE_WIDTH + lipW * 2, lip);
+  }
+
+  function drawBird() {
+    ctx.save();
+    ctx.translate(bird.x, bird.y);
+    ctx.rotate(bird.rot);
+
+    // thân
+    ctx.fillStyle = "#ffd23f";
+    ctx.strokeStyle = "#d5820b";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, bird.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // cánh — vỗ mượt: vỗ nhanh hơn khi vừa bay lên (vy âm)
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    const wingFlap = Math.sin(wingPhase) * 0.9;
+    ctx.ellipse(-4, 2, 7, 5 + Math.sin(wingPhase) * 1.5, wingFlap, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // mắt
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    ctx.arc(6, -5, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#000";
+    ctx.beginPath();
+    ctx.arc(8, -5, 2.3, 0, Math.PI * 2);
+    ctx.fill();
+
+    // mỏ
+    ctx.fillStyle = "#ff7f11";
+    ctx.beginPath();
+    ctx.moveTo(bird.r - 2, -2);
+    ctx.lineTo(bird.r + 7, 0);
+    ctx.lineTo(bird.r - 2, 4);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  function drawGround() {
+    ctx.fillStyle = isNight ? "#3a3f2e" : "#ded895";
+    ctx.fillRect(-30, H - GROUND_H, W + 60, GROUND_H + 30);
+    ctx.fillStyle = isNight ? "#2c3020" : "#c0b96c";
+    ctx.fillRect(-30, H - GROUND_H, W + 60, 12);
+    // vân cỏ
+    ctx.fillStyle = isNight ? "#454b34" : "#b6ce6b";
+    for (let x = groundX; x < W; x += 24) {
+      ctx.fillRect(x, H - GROUND_H, 12, 8);
+    }
+  }
+
+  function drawClouds() {
+    ctx.fillStyle = isNight ? "rgba(200,210,235,0.25)" : "rgba(255,255,255,0.7)";
+    const y = 90;
+    for (let i = 0; i < 3; i++) {
+      const cx = ((i * 160 - frames * 0.3) % (W + 120) + W + 120) % (W + 120) - 60;
+      ctx.beginPath();
+      ctx.arc(cx, y + i * 40, 22, 0, Math.PI * 2);
+      ctx.arc(cx + 24, y + i * 40, 28, 0, Math.PI * 2);
+      ctx.arc(cx + 52, y + i * 40, 20, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function drawScore() {
+    if (state === STATE.PLAYING || state === STATE.OVER) {
+      ctx.fillStyle = "#fff";
+      ctx.strokeStyle = "#000";
+      ctx.lineWidth = 4;
+      ctx.font = "bold 46px Segoe UI, sans-serif";
+      ctx.textAlign = "center";
+      ctx.strokeText(score, W / 2, 80);
+      ctx.fillText(score, W / 2, 80);
+    }
+  }
+
+  // nền trời (vẽ trong canvas để đổi Ngày/Đêm được), có overscan cho rung
+  function drawBackground() {
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    if (isNight) {
+      g.addColorStop(0, "#0b1a3a");
+      g.addColorStop(1, "#2a4680");
+    } else {
+      g.addColorStop(0, "#4ec0ca");
+      g.addColorStop(1, "#8fd7df");
+    }
+    ctx.fillStyle = g;
+    ctx.fillRect(-30, -30, W + 60, H + 60);
+
+    if (isNight) {
+      // sao
+      ctx.fillStyle = "rgba(255,255,255,0.85)";
+      for (const s of stars) ctx.fillRect(s.x, s.y, s.s, s.s);
+      // trăng khuyết
+      const mx = W - 130, my = 95;
+      ctx.fillStyle = "#fdf6c9";
+      ctx.beginPath(); ctx.arc(mx, my, 32, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = "#0b1a3a";
+      ctx.beginPath(); ctx.arc(mx + 13, my - 7, 28, 0, Math.PI * 2); ctx.fill();
+    } else {
+      // mặt trời nhạt
+      ctx.fillStyle = "rgba(255, 241, 168, 0.6)";
+      ctx.beginPath(); ctx.arc(W - 120, 95, 40, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  function drawFloatTexts() {
+    ctx.textAlign = "center";
+    ctx.font = "bold 30px Segoe UI, sans-serif";
+    ctx.lineWidth = 3;
+    for (const f of floatTexts) {
+      ctx.globalAlpha = Math.max(0, Math.min(1, f.life));
+      ctx.fillStyle = "#fff";
+      ctx.strokeStyle = "#d5820b";
+      ctx.strokeText("+1", f.x, f.y);
+      ctx.fillText("+1", f.x, f.y);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawCountdown() {
+    if (state !== STATE.PLAYING || countdown <= 0) return;
+    const label = Math.ceil(countdown / 1000);   // 3 → 2 → 1
+    const frac = (countdown % 1000) / 1000;        // 1 → 0 mỗi giây
+    const scale = 0.7 + frac * 0.6;                // phồng to rồi thu nhỏ
+    ctx.save();
+    ctx.translate(W / 2, H / 2 - 20);
+    ctx.scale(scale, scale);
+    ctx.globalAlpha = Math.min(1, frac * 1.5);
+    ctx.fillStyle = "#fff";
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = 7;
+    ctx.font = "bold 130px Segoe UI, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.strokeText(label, 0, 0);
+    ctx.fillText(label, 0, 0);
+    ctx.restore();
+    ctx.textBaseline = "alphabetic";
+  }
+
+  function drawFlash() {
+    if (flash > 0.01) {
+      ctx.fillStyle = `rgba(255,255,255,${flash})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+  }
+
+  function render() {
+    ctx.clearRect(0, 0, W, H);
+
+    ctx.save();
+    // rung màn hình khi va chạm
+    if (shake > 0.1) {
+      ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+    }
+    drawBackground();
+    drawClouds();
+    for (const p of pipes) drawPipe(p);
+    drawGround();
+    drawBird();
+    drawFloatTexts();
+    ctx.restore();
+
+    drawScore();      // điểm đứng yên, dễ đọc
+    drawCountdown();
+    drawFlash();       // chớp trắng phủ toàn màn
+  }
+
+  // hiệu ứng luôn cập nhật (kể cả khi OVER) — flash/shake tắt dần, cánh vỗ mượt
+  function stepEffects(dt) {
+    if (flash > 0) flash = Math.max(0, flash - 0.05 * dt);
+    if (shake > 0) shake = Math.max(0, shake - 0.8 * dt);
+    const wingSpeed = (state === STATE.PLAYING && bird.vy < 0) ? 0.75 : 0.35;
+    wingPhase += wingSpeed * dt;
+  }
+
+  function loop(now) {
+    if (!lastT) lastT = now;
+    let dt = (now - lastT) / (1000 / 60); // chuẩn hóa: 1.0 khi đúng 60fps
+    lastT = now;
+    if (dt > 3) dt = 3;                    // chặn nhảy vọt khi tab bị treo/chuyển
+    update(dt);
+    stepEffects(dt);
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  // ---- Điều khiển ----
+  function onInput(e) {
+    if (e.type === "keydown") {
+      if (e.code === "KeyP" || e.code === "Escape") {
+        e.preventDefault();
+        togglePause();
+        return;
+      }
+      if (e.code !== "Space" && e.code !== "ArrowUp") return;
+      e.preventDefault();
+    }
+    if (state === STATE.PLAYING) flap();
+    else if (state === STATE.READY) startGame();
+    // khi OVER: dùng nút "Chơi lại" để tránh restart ngoài ý muốn
+  }
+
+  document.addEventListener("keydown", onInput);
+  canvas.addEventListener("mousedown", onInput);
+  canvas.addEventListener("touchstart", (e) => { e.preventDefault(); onInput(e); }, { passive: false });
+
+  startBtn.addEventListener("click", (e) => { e.stopPropagation(); startGame(); });
+
+  // nút bật/tắt nhạc nền
+  const muteBtn = document.getElementById("muteBtn");
+  muteBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const on = Sound.toggleMusic();
+    muteBtn.textContent = on ? "🔊" : "🔇";
+    if (on && state === STATE.PLAYING) Sound.startMusic();
+  });
+
+  // nút chế độ Ngày/Đêm
+  const dayNightBtn = document.getElementById("dayNightBtn");
+  dayNightBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    isNight = !isNight;
+    dayNightBtn.textContent = isNight ? "☀️" : "🌙";
+    dayNightBtn.title = isNight ? "Chuyển sang Ngày" : "Chuyển sang Đêm";
+  });
+
+  // ---- Khởi động ----
+  reset();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
